@@ -217,15 +217,17 @@ runs, spool in memory unless said:
 
 | scenario | messages per second | allocations per message, whole process |
 | --- | --- | --- |
-| 1 domain, 1 recipient, 1 KB | 69,000 to 72,000 | 70 |
-| 50 domains, 1 recipient, 1 KB | 72,000 to 74,000 | 70 |
-| 1 domain, 5 recipients, 1 KB | 71,000 to 73,000 | 97 |
-| 50 domains, 1 recipient, 50 KB | 30,000 to 31,000 (about 1.5 GB/s) | 1,142 |
+| 1 domain, 1 recipient, 1 KB | 69,000 to 77,000 | 70 |
+| 50 domains, 1 recipient, 1 KB | 72,000 | 70 |
+| 1 domain, 5 recipients, 1 KB | 72,000 to 75,000 | 97 |
+| 50 domains, 1 recipient, 50 KB | 31,000 (about 1.5 GB/s) | 1,142 |
 | 50 domains, 1 recipient, 1 KB, `DiskSpool` with `NoSync` | about 5,400 | 140 |
 | 50 domains, 1 recipient, 1 KB, `DiskSpool` with fsync | about 100 | 144 |
 
-The allocation column counts the fake server's too, which is most of it; the
-engine's own share is about a dozen per message, found by profile. In the CPU
+The allocation column counts the fake server's too, which is most of it. By
+profile the engine's own share is about four allocations per message in `Submit`
+(the copy of the metadata, the queue entry and the in-memory spool's copy) and
+about two in delivery (the reply text and the event ID). In the CPU
 profile 86% of the time is in the read and write system calls.
 
 The disk figures are the honest limit of this release: a `DiskSpool` with fsync
