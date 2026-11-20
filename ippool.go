@@ -115,10 +115,15 @@ type PoolIP struct {
 type IPPoolConfig struct {
 	Name string
 	IPs  []PoolIP
+	// Location is the time zone whose midnight starts a new warmup day: the
+	// quota counters reset there and WarmupStart is read as a date there. The
+	// zero value is UTC.
+	Location *time.Location
 }
 
 // ErrQuotaExhausted means every address of the pool is at its daily quota.
-// RetryAfter is the wait until the next UTC day, when the counters reset.
+// RetryAfter is the wait until the next day of the pool's Location (UTC by
+// default), when the counters reset.
 type ErrQuotaExhausted struct {
 	Pool       string
 	RetryAfter time.Duration
@@ -137,17 +142,30 @@ type IPPools struct {
 
 type ipPool struct {
 	name string
+	loc  *time.Location
 	ips  []*poolIP
 }
 
 type poolIP struct {
 	PoolIP
-	start   time.Time // UTC midnight of the warmup start
-	usedDay int64     // unix day the counter belongs to
+	start   int64 // day number of the warmup start, in the pool's location
+	loc     *time.Location
+	usedDay int64 // day number the counter belongs to
 	used    int
 }
 
-func utcDay(t time.Time) int64 { return t.UTC().Unix() / 86400 }
+// dayIn numbers the calendar days of loc, so two instants have the same number
+// exactly when loc's clock shows the same date.
+func dayIn(t time.Time, loc *time.Location) int64 {
+	y, m, d := t.In(loc).Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC).Unix() / 86400
+}
+
+// nextDay is the first instant of the day after t's, in loc.
+func nextDay(t time.Time, loc *time.Location) time.Time {
+	y, m, d := t.In(loc).Date()
+	return time.Date(y, m, d+1, 0, 0, 0, 0, loc)
+}
 
 // NewIPPools builds the pools.
 func NewIPPools(cfgs ...IPPoolConfig) (*IPPools, error) {
@@ -163,7 +181,11 @@ func NewIPPools(cfgs ...IPPoolConfig) (*IPPools, error) {
 		if len(c.IPs) == 0 {
 			return nil, fmt.Errorf("mta: ip pool %q has no addresses", c.Name)
 		}
-		pool := &ipPool{name: c.Name}
+		loc := c.Location
+		if loc == nil {
+			loc = time.UTC
+		}
+		pool := &ipPool{name: c.Name, loc: loc}
 		for _, ip := range c.IPs {
 			if !ip.Addr.IsValid() {
 				return nil, fmt.Errorf("mta: ip pool %q has an invalid address", c.Name)
@@ -178,7 +200,7 @@ func NewIPPools(cfgs ...IPPoolConfig) (*IPPools, error) {
 			if start.IsZero() {
 				start = now
 			}
-			pool.ips = append(pool.ips, &poolIP{PoolIP: ip, start: time.Unix(utcDay(start)*86400, 0).UTC()})
+			pool.ips = append(pool.ips, &poolIP{PoolIP: ip, start: dayIn(start, loc), loc: loc})
 		}
 		p.pools[c.Name] = pool
 	}
@@ -224,11 +246,11 @@ func (l *IPLease) Release() {
 }
 
 func (ip *poolIP) remaining(now time.Time) (left int, limited bool) {
-	today := utcDay(now)
+	today := dayIn(now, ip.loc)
 	if ip.usedDay != today {
 		ip.usedDay, ip.used = today, 0
 	}
-	day := int((today - utcDay(ip.start)))
+	day := int(today - ip.start)
 	q, ok := ip.Warmup.Quota(day)
 	if !ok {
 		return 0, false
@@ -257,8 +279,7 @@ func (p *IPPools) Reserve(pool string, n int, now time.Time) (*IPLease, error) {
 		}
 	}
 	if total == 0 {
-		next := time.Unix((utcDay(now)+1)*86400, 0)
-		return nil, &ErrQuotaExhausted{Pool: pool, RetryAfter: next.Sub(now)}
+		return nil, &ErrQuotaExhausted{Pool: pool, RetryAfter: nextDay(now, pl.loc).Sub(now)}
 	}
 	pick := rand.IntN(total)
 	for _, ip := range pl.ips {
@@ -296,7 +317,7 @@ func (p *IPPools) Usage(now time.Time) []IPUsage {
 	for _, pl := range p.pools {
 		for _, ip := range pl.ips {
 			_, _ = ip.remaining(now)
-			day := int(utcDay(now) - utcDay(ip.start))
+			day := int(dayIn(now, ip.loc) - ip.start)
 			q, _ := ip.Warmup.Quota(day)
 			out = append(out, IPUsage{Pool: pl.name, Addr: ip.Addr, Day: day, Quota: q, Used: ip.used})
 		}
@@ -318,7 +339,7 @@ func (p *IPPools) RestoreUsage(pool string, addr netip.Addr, used int, now time.
 	}
 	for _, ip := range pl.ips {
 		if ip.Addr == addr {
-			ip.usedDay, ip.used = utcDay(now), used
+			ip.usedDay, ip.used = dayIn(now, ip.loc), used
 		}
 	}
 }

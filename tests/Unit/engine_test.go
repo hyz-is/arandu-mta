@@ -697,3 +697,56 @@ func TestMetricsAreWalkable(t *testing.T) {
 		t.Fatalf("kinds = %v", kinds)
 	}
 }
+
+// The quota day follows the pool's Location: at 23:30 and at 00:30 of Sao Paulo
+// the counters are one day apart, and the same instants fall on one UTC day.
+func TestIPPoolDayTurnsAtMidnightOfTheLocation(t *testing.T) {
+	sp, err := time.LoadLocation("America/Sao_Paulo")
+	if err != nil {
+		t.Skip("no time zone database:", err)
+	}
+	warm := mta.WarmupSchedule{Days: []int{1, 2}}
+	ip := netip.MustParseAddr("192.0.2.1")
+	late := time.Date(2026, 11, 20, 23, 30, 0, 0, sp) // 02:30 UTC on the 21st
+	early := time.Date(2026, 11, 21, 0, 30, 0, 0, sp)
+
+	// Located in Sao Paulo: quota used at 23:30 is fresh at 00:30.
+	pools, err := mta.NewIPPools(mta.IPPoolConfig{Name: "p", Location: sp, IPs: []mta.PoolIP{
+		{Addr: ip, Warmup: warm, WarmupStart: time.Date(2026, 11, 20, 0, 0, 0, 0, sp)},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pools.Reserve("p", 1, late); err != nil {
+		t.Fatal(err)
+	}
+	_, err = pools.Reserve("p", 1, late)
+	var qe *mta.ErrQuotaExhausted
+	if !errors.As(err, &qe) {
+		t.Fatalf("day 0 allows one recipient, got %v", err)
+	}
+	if want := 30 * time.Minute; qe.RetryAfter != want {
+		t.Fatalf("RetryAfter = %v, want %v (the next midnight of Sao Paulo)", qe.RetryAfter, want)
+	}
+	if _, err := pools.Reserve("p", 1, early); err != nil {
+		t.Fatalf("after Sao Paulo midnight the counter must be fresh: %v", err)
+	}
+	if u := pools.Usage(early); len(u) != 1 || u[0].Day != 1 || u[0].Quota != 2 {
+		t.Fatalf("usage at 00:30 = %+v, want warmup day 1 with quota 2", u)
+	}
+
+	// Without a Location the day is UTC, as before: 23:30 and 00:30 of Sao Paulo
+	// are the same UTC day, so the quota is not fresh.
+	pools, err = mta.NewIPPools(mta.IPPoolConfig{Name: "p", IPs: []mta.PoolIP{
+		{Addr: ip, Warmup: warm, WarmupStart: late.UTC()},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pools.Reserve("p", 1, late); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pools.Reserve("p", 1, early); !errors.As(err, &qe) {
+		t.Fatalf("UTC day is the same at 23:30 and 00:30 of Sao Paulo, got %v", err)
+	}
+}

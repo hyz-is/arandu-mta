@@ -10,6 +10,12 @@ a release is corrected by another release and never by moving a tag.
 
 ## [Unreleased]
 
+### Added
+
+- `IPPoolConfig.Location`: the time zone whose midnight starts a new warm-up day and
+  whose calendar reads `WarmupStart`. The zero value is UTC, so nothing changes for
+  an existing caller.
+
 ## [0.1.0] - 2026-11-20
 
 ### Added

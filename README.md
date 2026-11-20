@@ -188,8 +188,9 @@ counted and does not stop the mail (RFC 8461 section 5.1).
   (`GeometricWarmup`, `ParseWarmupSchedule("50,100,200,500,*")`), the EHLO name
   of each address, `Usage` to read the counters and `RestoreUsage` to put them
   back after a restart. When every address of a pool is at its quota the
-  message waits for the next UTC day without a delivery-delayed event and
-  without spending an attempt.
+  message waits for the next day without a delivery-delayed event and
+  without spending an attempt. A day is a UTC day unless `IPPoolConfig.Location`
+  names a time zone, whose midnight then resets the counters.
 
 ## Metrics
 
