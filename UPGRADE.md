@@ -1,4 +1,5 @@
 # Upgrade Guide
 
-This package has no release yet. The first one will list here what an
-application has to change when it moves from an earlier version to the next.
+## v0.1.0
+
+Nothing to upgrade from: this is the first release.
