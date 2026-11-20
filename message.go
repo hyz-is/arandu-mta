@@ -146,6 +146,8 @@ type Message struct {
 	// CreatedAt is when the engine accepted the message.
 	CreatedAt time.Time `json:"created"`
 	// ExpiresAt is when the engine stops retrying and bounces what is left.
+	// Submit sets it to the time of acceptance plus Config.Expiry, unless the
+	// caller gave a time.
 	ExpiresAt time.Time `json:"expires"`
 }
 

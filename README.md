@@ -244,3 +244,18 @@ DKIM signing, MIME building, DSN and ARF parsing and SPF/DMARC belong to
 `arandu-mail`; the inbound SMTP server belongs to `arandu-smtpd`. DANE and TLS
 reporting (RFC 8460) are not implemented. DNSSEC is not validated. Webhooks,
 the API and the dashboard belong to the application.
+
+## Running it
+
+- `EHLOName` must be a name that resolves to the sending address and whose
+  reverse DNS points back at it; set one per address in `PoolIP.EHLOName`.
+- The defaults for `Timeouts` are the RFC 5321 ones, up to five minutes for a
+  banner. A node that sends bulk mail usually lowers `Greeting` and `Command`
+  to tens of seconds so a stalled server does not hold a worker.
+- Put the spool on a volume that survives a restart, give each node its own
+  directory, and close the spool after `Shutdown`.
+- Give the `EventSink` a durable outbox. The engine counts a sink error and does
+  not retry the event.
+- `Workers` is the number of simultaneous transactions across all domains;
+  `MaxConnsPerDomain` and `DomainLimits` keep any one provider from taking them
+  all.

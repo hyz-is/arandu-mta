@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -517,5 +518,182 @@ func TestShutdownTimeoutCutsTheTransactionOff(t *testing.T) {
 	// The message was not settled, so it is still in the spool for the next start.
 	if h.spool.(*mta.MemorySpool).Len() != 1 {
 		t.Fatal("an interrupted message must stay in the spool")
+	}
+}
+
+func TestAddressFamilyPreference(t *testing.T) {
+	for name, tc := range map[string]struct {
+		pref  mta.IPPreference
+		first string
+		saw6  bool
+	}{
+		"prefer v4": {mta.PreferIPv4, "127.0.0.1", false},
+		"prefer v6": {mta.PreferIPv6, "::1", true},
+		"v4 only":   {mta.IPv4Only, "127.0.0.1", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var mu sync.Mutex
+			var tried []string
+			srv, err := mtatest.Start(mtatest.Config{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer srv.Close()
+			h := newHarness(t, mtatest.Config{}, func(c *mta.Config) {
+				c.IPPreference = tc.pref
+				c.Dial = func(ctx context.Context, tg mta.DialTarget) (net_Conn, error) {
+					mu.Lock()
+					tried = append(tried, tg.Addr.String())
+					mu.Unlock()
+					if tg.Addr.Is6() { // this test machine need not have IPv6: pretend it is down
+						return nil, errors.New("network unreachable")
+					}
+					return dialTCP(ctx, srv.Addr())
+				}
+			})
+			h.res.AddMX("dual.test", mta.MX{Host: "mx.dual.test", Pref: 10})
+			h.res.AddHost("mx.dual.test", "::1", "127.0.0.1")
+			h.submit(msg("af", "a@dual.test"))
+			h.events.waitType(t, mta.EventDelivered, 1)
+			mu.Lock()
+			defer mu.Unlock()
+			if tried[0] != tc.first {
+				t.Fatalf("first address tried = %s, want %s (all: %v)", tried[0], tc.first, tried)
+			}
+			saw6 := false
+			for _, a := range tried {
+				saw6 = saw6 || a == "::1"
+			}
+			if saw6 != tc.saw6 {
+				t.Fatalf("IPv6 tried = %v, want %v (all: %v)", saw6, tc.saw6, tried)
+			}
+		})
+	}
+
+	h := newHarness(t, mtatest.Config{}, func(c *mta.Config) { c.IPPreference = mta.IPv6Only })
+	h.res.AddMX("v4.test", mta.MX{Host: "mx.v4.test", Pref: 10}).AddHost("mx.v4.test", "127.0.0.1")
+	h.submit(msg("af2", "a@v4.test"))
+	ev := h.events.waitType(t, mta.EventDeferred, 1)[0]
+	if ev.Enhanced != "4.4.4" {
+		t.Fatalf("event = %+v", ev)
+	}
+}
+
+func TestEqualPreferenceMXHostsShareTheLoad(t *testing.T) {
+	var mu sync.Mutex
+	counts := map[string]int{}
+	h := newHarness(t, mtatest.Config{}, func(c *mta.Config) {
+		c.MaxMessagesPerConn = 1 // a fresh pick for every message
+		c.Dial = func(ctx context.Context, tg mta.DialTarget) (net_Conn, error) {
+			mu.Lock()
+			counts[tg.Host]++
+			mu.Unlock()
+			return dialTCP(ctx, "127.0.0.1:"+itoa(tg.Port))
+		}
+	})
+	h.res.AddMX("lb.test", mta.MX{Host: "a.lb.test", Pref: 10}, mta.MX{Host: "b.lb.test", Pref: 10}, mta.MX{Host: "z.lb.test", Pref: 99})
+	h.res.AddHost("a.lb.test", "127.0.0.1").AddHost("b.lb.test", "127.0.0.1").AddHost("z.lb.test", "127.0.0.1")
+	for i := 0; i < 60; i++ {
+		h.submit(msg("lb"+itoa(i), "a@lb.test"))
+		h.events.waitType(t, mta.EventDelivered, i+1)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if counts["a.lb.test"] < 10 || counts["b.lb.test"] < 10 || counts["z.lb.test"] != 0 {
+		t.Fatalf("connections per MX = %v; equal preferences must share the load and a worse one must not be used", counts)
+	}
+}
+
+func TestEventIDsAreStable(t *testing.T) {
+	h := newHarness(t, mtatest.Config{}, nil)
+	h.submit(msg("ev1", "a@example.com", "b@example.com"))
+	h.events.waitType(t, mta.EventDelivered, 2)
+	ids := map[string]bool{}
+	for _, e := range h.events.all() {
+		ids[e.ID] = true
+	}
+	if !ids["ev1/0/1/DELIVERED"] || !ids["ev1/1/1/DELIVERED"] {
+		t.Fatalf("event ids = %v", ids)
+	}
+}
+
+// brokenData is a spool that cannot read message data.
+type brokenData struct{ *mta.MemorySpool }
+
+func (brokenData) ReadData(context.Context, string, []byte) ([]byte, error) {
+	return nil, errors.New("disk on fire")
+}
+
+func TestInternalErrorEndsTheRecipientAsFailed(t *testing.T) {
+	h := newHarness(t, mtatest.Config{}, func(c *mta.Config) { c.Spool = brokenData{mta.NewMemorySpool()} })
+	h.submit(msg("fa1", "a@example.com"))
+	ev := h.events.waitType(t, mta.EventFailed, 1)[0]
+	if ev.Code != 0 || !ev.Local || ev.Attempt != 1 || ev.Class.Type != mta.BounceUndetermined {
+		t.Fatalf("event = %+v", ev)
+	}
+	if h.srv.Stats().Connections != 0 {
+		t.Fatal("connected without a message to send")
+	}
+	if h.eng.Metrics().Failed.Load() != 1 || h.eng.Metrics().SpoolErrors.Load() != 1 {
+		t.Fatalf("metrics: failed=%d spool errors=%d", h.eng.Metrics().Failed.Load(), h.eng.Metrics().SpoolErrors.Load())
+	}
+}
+
+func TestAPanicInAHookEndsTheRecipientInsteadOfLoopingOrKillingTheProcess(t *testing.T) {
+	boom := mta.ClassifierFunc(func(int, string, string) mta.Classification { panic("classifier bug") })
+	h := newHarness(t, mtatest.Config{OnRcpt: func(string) *mtatest.Reply { return rep(550, "5.1.1", "no") }}, func(c *mta.Config) { c.Classifier = boom })
+	h.submit(msg("pa1", "a@example.com"))
+	ev := h.events.waitType(t, mta.EventFailed, 1)[0]
+	if !strings.Contains(ev.Text, "internal error") {
+		t.Fatalf("event = %+v", ev)
+	}
+	// The engine is still alive.
+	h.submit(msg("pa2", "b@example.com"))
+	h.events.waitType(t, mta.EventFailed, 2)
+}
+
+type failingSink struct{ n atomic.Int32 }
+
+func (f *failingSink) Emit(context.Context, mta.Event) error {
+	f.n.Add(1)
+	return errors.New("outbox full")
+}
+
+func TestASinkThatFailsIsCountedAndDoesNotStopDelivery(t *testing.T) {
+	sink := &failingSink{}
+	h := newHarness(t, mtatest.Config{}, func(c *mta.Config) { c.Events = sink })
+	h.submit(msg("sk1", "a@example.com"))
+	if !h.srv.WaitMessages(1, 5*time.Second) {
+		t.Fatal("not delivered")
+	}
+	if err := h.eng.Drain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for h.eng.Metrics().EventErrors.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if sink.n.Load() != 1 || h.eng.Metrics().EventErrors.Load() != 1 {
+		t.Fatalf("sink calls=%d, event errors=%d", sink.n.Load(), h.eng.Metrics().EventErrors.Load())
+	}
+}
+
+func TestMetricsAreWalkable(t *testing.T) {
+	h := newHarness(t, mtatest.Config{}, nil)
+	h.submit(msg("mx1", "a@example.com"))
+	h.events.waitType(t, mta.EventDelivered, 1)
+	snap := h.eng.Metrics().Snapshot()
+	if snap["mta_messages_submitted_total"] != 1 || snap["mta_delivered_total"] != 1 || snap["mta_transactions_total"] != 1 || snap["mta_connections_opened_total"] != 1 {
+		t.Fatalf("snapshot = %v", snap)
+	}
+	kinds := map[string]mta.MetricKind{}
+	h.eng.Metrics().Each(func(name, help string, kind mta.MetricKind, _ uint64) {
+		if help == "" || !strings.HasPrefix(name, "mta_") {
+			t.Errorf("metric %q has help %q", name, help)
+		}
+		kinds[name] = kind
+	})
+	if kinds["mta_pending_recipients"] != mta.KindGauge || kinds["mta_delivered_total"] != mta.KindCounter || mta.KindGauge.String() != "gauge" {
+		t.Fatalf("kinds = %v", kinds)
 	}
 }

@@ -87,7 +87,8 @@ func New(cfg Config) (*Engine, error) {
 // Metrics returns the engine's counters.
 func (e *Engine) Metrics() *Metrics { return e.metrics }
 
-// Start rebuilds the queue from the spool and starts the workers. Messages
+// Start rebuilds the queue from the spool and starts the workers. ctx bounds
+// only the recovery; the workers run until Shutdown. Messages
 // found in the spool, from before a restart or a crash, are scheduled at their
 // next due time; a message whose recipients were all settled is removed.
 func (e *Engine) Start(ctx context.Context) error {
