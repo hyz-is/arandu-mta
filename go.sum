@@ -1,10 +1,4 @@
-github.com/arandu-io/framework v0.71.0 h1:aXPqOV4dbcwfmdIr77JLXwPcX7KsanlFMp2y0qk29eM=
-github.com/arandu-io/framework v0.71.0/go.mod h1:kpvC59lOhrdus4WsLg7JiaZ6JqTbszKrhLPYNTKqYXI=
-github.com/arandu-io/hesape v0.109.0 h1:C48cBFs5SR7Iha7ushxVMmGGIAhcYQ/zdykReMVgjpg=
-github.com/arandu-io/hesape v0.109.0/go.mod h1:wwVHND0vi2S1Fynb/47PPzKqzTmfAHNXZUMlbxNI2T4=
-github.com/arandu-io/hesape/filesystem/s3 v0.11.0 h1:rJOA7ToEX29IObYCaFaLLDWQwwPvY8jI380aVHMkUfc=
-github.com/arandu-io/hesape/filesystem/s3 v0.11.0/go.mod h1:8LjiOdirA+YYCnQIs50BmIulXYdJFLkSOXfap+3JRFk=
-golang.org/x/crypto v0.57.0 h1:3ZVCjf8Ggz7zneR/EHRVx68Ctf+2pmIMP2UFhh9cC6M=
-golang.org/x/crypto v0.57.0/go.mod h1:Fdz0i5U6CoizGwLda9DttjSk6qlZo25zYNtR+ycvuZA=
-golang.org/x/sys v0.48.0 h1:bbX/i/6MgT9BVLM9RT1thmxL04yeTAhbEz4SyadbXoo=
-golang.org/x/sys v0.48.0/go.mod h1:hNLxWAXmnKAxqDtdwIYC4bM9oQPEecfsnNMuSxOs3og=
+golang.org/x/net v0.62.0 h1:18ELalfM5+XNRwzM2nYqXsZQ9ByS1uhj2O/U7+5jqRY=
+golang.org/x/net v0.62.0/go.mod h1:WgDCOTH8iwtB66T4/GfI94AHo/hhdb7Hah9NDseQfiI=
+golang.org/x/text v0.43.0 h1:1QivrlhwAsnMOcqgOdl9my7s9OyZl8O5/UGUTJVXoWc=
+golang.org/x/text v0.43.0/go.mod h1:hbSIYA/amXcRXTFSZqh8tWHEoqRvvbKPJ2uz/KU+a+s=
